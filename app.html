@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>党务档案管理系统</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="loading-mask" id="loadingMask"><div class="spinner"></div></div>
+<div class="toast" id="toast"></div>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">党</div>
+      <b>党务档案管理系统</b>
+    </div>
+    <div class="user-area">
+      <span id="userName">--</span>
+      <span class="role-pill" id="rolePill">--</span>
+      <button class="btn-logout" id="logoutBtn">退出登录</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar">
+      <button class="nav-item active" data-sec="search">
+        <span class="ico">🔍</span><span class="txt">精确查询</span>
+      </button>
+      <button class="nav-item admin-only hidden" data-sec="browse">
+        <span class="ico">📋</span><span class="txt">列表浏览</span>
+      </button>
+      <button class="nav-item admin-only hidden" data-sec="upload">
+        <span class="ico">⬆️</span><span class="txt">数据更新</span>
+      </button>
+      <button class="nav-item admin-only hidden" data-sec="logs">
+        <span class="ico">🕐</span><span class="txt">操作日志</span>
+      </button>
+    </nav>
+
+    <main class="main">
+      <!-- ============ 1. 精确查询 ============ -->
+      <section class="section active" id="sec-search">
+        <h2 class="page-title">精确查询</h2>
+        <p class="page-sub">输入所在班级与姓名，精确查询党务档案信息</p>
+        <div class="card">
+          <div class="search-bar">
+            <div class="field">
+              <label>班级</label>
+              <input type="text" id="qClass" placeholder="如：23软件1班">
+            </div>
+            <div class="field">
+              <label>姓名</label>
+              <input type="text" id="qName" placeholder="请输入姓名">
+            </div>
+            <button class="btn btn-primary" id="qBtn">查 询</button>
+          </div>
+        </div>
+        <div id="searchResult"></div>
+      </section>
+
+      <!-- ============ 2. 列表浏览（仅管理员） ============ -->
+      <section class="section admin-only" id="sec-browse">
+        <h2 class="page-title">列表浏览</h2>
+        <p class="page-sub">按入党期数 / 阶段 / 班级筛选，总览党务档案</p>
+        <div class="card">
+          <div class="filter-row" id="browseFilters">
+            <label>入党期数 <select id="fQi"><option value="">全部</option></select></label>
+            <label>发展阶段 <select id="fStage">
+              <option value="">全部</option>
+              <option>入党申请人</option>
+              <option>入党积极分子</option>
+              <option>发展对象</option>
+              <option>预备党员</option>
+              <option>正式党员</option>
+            </select></label>
+            <label>班级 <input type="text" id="fClass" placeholder="班级关键词" style="width:130px"></label>
+            <label>姓名/学号 <input type="text" id="fKeyword" placeholder="姓名或学号" style="width:140px"></label>
+            <button class="btn btn-ghost btn-sm" id="browseBtn">筛选</button>
+            <button class="btn btn-ghost btn-sm" id="resetBtn">重置</button>
+          </div>
+          <div class="tbl-wrap" style="max-height:calc(100vh - 330px); overflow:auto;">
+            <table class="tbl" id="browseTbl">
+              <thead><tr>
+                <th>期数</th><th>班级</th><th>姓名</th><th>性别</th><th>民族</th>
+                <th>政治面貌</th><th>发展阶段</th><th>状态</th><th>操作</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="browseDetail"></div>
+      </section>
+
+      <!-- ============ 3. 数据更新（仅管理员） ============ -->
+      <section class="section admin-only" id="sec-upload">
+        <h2 class="page-title">数据更新</h2>
+        <p class="page-sub">上传 Excel / Word 档案表，系统解析预览后一键更新数据库</p>
+        <div class="card">
+          <h3>上传 Excel 档案表（.xlsx / .xls / .csv）</h3>
+          <div class="upload-zone" id="excelZone">
+            <input type="file" id="excelFile" accept=".xlsx,.xls,.csv">
+            <div class="big">点击选择或拖拽 Excel 文件到此处</div>
+            <div class="sub">第一行为表头；需包含「班级、姓名」列，其余列自动按字段名匹配</div>
+          </div>
+          <div class="hidden" id="excelPreviewBox">
+            <div class="stat-line" id="excelStat"></div>
+            <div class="tbl-wrap batch-table">
+              <table class="tbl" id="excelPreviewTbl"><thead></thead><tbody></tbody></table>
+            </div>
+            <div class="preview-actions">
+              <button class="btn btn-primary" id="excelCommit">确认导入 Excel 数据</button>
+              <button class="btn btn-ghost" id="excelCancel">放弃</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>上传 Word 档案表（.docx）</h3>
+          <div class="upload-zone" id="wordZone">
+            <input type="file" id="wordFile" accept=".docx">
+            <div class="big">点击选择或拖拽 Word 文档到此处</div>
+            <div class="sub">支持将 Word 表格解析为结构化档案数据（需包含表头行，表头含「班级、姓名」等列名）</div>
+          </div>
+          <div class="hidden" id="wordPreviewBox">
+            <div class="stat-line" id="wordStat"></div>
+            <div class="tbl-wrap batch-table">
+              <table class="tbl" id="wordPreviewTbl"><thead></thead><tbody></tbody></table>
+            </div>
+            <div class="preview-actions">
+              <button class="btn btn-primary" id="wordCommit">确认导入 Word 数据</button>
+              <button class="btn btn-ghost" id="wordCancel">放弃</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 4. 操作日志（仅管理员） ============ -->
+      <section class="section admin-only" id="sec-logs">
+        <h2 class="page-title">操作日志</h2>
+        <p class="page-sub">记录导入、更新等关键操作，确保档案变更可追溯</p>
+        <div class="card">
+          <div class="filter-row">
+            <button class="btn btn-ghost btn-sm" id="refreshLogs">刷新日志</button>
+          </div>
+          <div id="logsList"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="js/supabase-config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/loader.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
