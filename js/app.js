@@ -136,17 +136,16 @@
     box.querySelectorAll("[data-open]").forEach(btn => {
       btn.addEventListener("click", () => {
         const el = $("searchDetail");
-        el.innerHTML = memberDetailCard(rows[+btn.dataset.open]);
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        renderMemberDetail(rows[+btn.dataset.open], "searchDetail", false, true);
       });
     });
     if (rows.length === 1) {
-      $("searchDetail").innerHTML = memberDetailCard(rows[0]);
+      renderMemberDetail(rows[0], "searchDetail", false, false);
     }
   }
 
-  // 成员详情卡
-  function memberDetailCard(m) {
+  // 成员详情卡：管理员在卡片底部渲染"编辑档案"入口（browse 容器按钮带 id=data-edit）
+  function memberDetailCard(m, browseCtx) {
     const items = [
       ["班级", m.class_name], ["姓名", m.name], ["学号", m.student_id], ["性别", m.gender],
       ["出生日期", fmtDate(m.birth_date)], ["民族", m.ethnicity], ["政治面貌", m.political_status],
@@ -160,7 +159,190 @@
     const grid = items.map(([k, v]) =>
       `<div class="detail-item"><span class="k">${k}</span><span class="v ${v == null || v === "" ? "muted" : ""}">${v == null || v === "" ? "—" : esc(v)}</span></div>`
     ).join("");
-    return `<div class="card"><h3>档案详情 · ${esc(m.class_name)} ${esc(m.name)}</h3><div class="detail-grid">${grid}</div></div>`;
+    let footer = "";
+    if (PA.isAdmin()) {
+      footer = `<div class="detail-actions"><button type="button" class="btn btn-ghost btn-sm member-edit-btn"${browseCtx ? ' id="data-edit"' : ""}>编辑档案</button></div>`;
+    }
+    return `<div class="card"><h3>档案详情 · ${esc(m.class_name)} ${esc(m.name)}</h3><div class="detail-grid">${grid}</div>${footer}</div>`;
+  }
+
+  // ================================================================
+  // 1.5 管理员单条档案编辑
+  // ================================================================
+  const EDIT_FIELDS = [
+    { key: "party_qi", label: "期数", type: "select", list: "qi" },
+    { key: "class_name", label: "班级", type: "text", required: true },
+    { key: "name", label: "姓名", type: "text", required: true },
+    { key: "student_id", label: "学号", type: "text" },
+    { key: "gender", label: "性别", type: "select", list: ["男", "女"] },
+    { key: "ethnicity", label: "民族", type: "text" },
+    { key: "political_status", label: "政治面貌", type: "text" },
+    { key: "id_card", label: "身份证号", type: "text" },
+    { key: "join_league_date", label: "入团日期", type: "date" },
+    { key: "birth_date", label: "出生日期", type: "date" },
+    { key: "apply_date", label: "入党申请时间", type: "date" },
+    { key: "talk_date", label: "谈话时间", type: "date" },
+    { key: "recommend_date", label: "推优时间", type: "date" },
+    { key: "activist_date", label: "积极分子确定时间", type: "date" },
+    { key: "develop_date", label: "发展对象确定时间", type: "date" },
+    { key: "probation_date", label: "预备党员时间", type: "date" },
+    { key: "full_date", label: "转正时间", type: "date" },
+    { key: "current_stage", label: "发展阶段", type: "select", list: ["入党申请人", "入党积极分子", "发展对象", "预备党员"] },
+    { key: "status_flag", label: "状态", type: "select", list: ["继续发展", "待确认", "已退出", "转出", "转入"] },
+    { key: "introducer", label: "介绍人", type: "text" },
+    { key: "remark", label: "备注", type: "textarea" }
+  ];
+  const detailCtx = { boxId: "", m: null, browseCtx: false };
+
+  // 详情/编辑共用渲染入口：记录当前上下文并在指定容器渲染详情卡
+  function renderMemberDetail(m, boxId, browseCtx, scroll) {
+    const el = $(boxId);
+    if (!el) return;
+    detailCtx.boxId = boxId;
+    detailCtx.m = m;
+    detailCtx.browseCtx = !!browseCtx;
+    el.innerHTML = memberDetailCard(m, browseCtx);
+    if (scroll) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function editRawValue(m, key) {
+    return m[key] == null ? "" : String(m[key]);
+  }
+
+  // 表单控件 HTML：select 下拉选项 = 静态列表；期数由 listDistinct 动态提供
+  function editControlHtml(f, m, qiOptions) {
+    const cur = editRawValue(m, f.key);
+    if (f.type === "date") {
+      const val = fmtDate(m[f.key]) || "";
+      return `<input type="date" data-field="${f.key}" value="${esc(val)}">`;
+    }
+    if (f.type === "textarea") {
+      return `<textarea data-field="${f.key}" rows="2">${esc(cur)}</textarea>`;
+    }
+    if (f.type === "select") {
+      let vals = (f.list === "qi") ? (qiOptions || []).slice() : (f.list || []).slice();
+      if (cur && vals.indexOf(cur) < 0) vals = [cur].concat(vals);
+      let html = `<option value="">请选择</option>`;
+      vals.forEach(v => {
+        html += `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(v)}</option>`;
+      });
+      return `<select data-field="${f.key}">${html}</select>`;
+    }
+    return `<input type="text" data-field="${f.key}" value="${esc(cur)}">`;
+  }
+
+  function editFormHtml(m, qiOptions) {
+    const rows = EDIT_FIELDS.map(f => {
+      const req = f.required ? " <b>*</b>" : "";
+      return `<div class="field${f.type === "textarea" ? " full" : ""}"><label>${esc(f.label)}${req}</label>${editControlHtml(f, m, qiOptions)}</div>`;
+    }).join("");
+    return `<div class="card">
+      <div class="edit-form-head">
+        <h3 style="margin:0">编辑档案 · ${esc(m.class_name)} ${esc(m.name)}</h3>
+        <span class="note">带 * 为必填；留空的日期/文本将保存为空</span>
+        <button type="button" class="btn btn-ghost btn-sm" data-edit-cancel>返回详情</button>
+      </div>
+      <div class="edit-form-grid">${rows}</div>
+      <div class="edit-actions">
+        <button type="button" class="btn btn-primary" data-edit-save>保存修改</button>
+        <button type="button" class="btn btn-ghost" data-edit-cancel>取消</button>
+      </div>
+    </div>`;
+  }
+
+  async function openMemberEdit() {
+    const m = detailCtx.m;
+    const box = $(detailCtx.boxId);
+    if (!m || !m.id) { showErr("缺少可编辑的档案"); return; }
+    if (!box) return;
+    let qis = [];
+    try { qis = await PA.listDistinct("party_qi"); } catch (e) { /* 忽略 */ }
+    if (!qis.length) {
+      const sel = $("fQi");
+      if (sel) qis = Array.from(sel.options).map(o => o.value).filter(v => v && v !== "全部");
+    }
+    box.innerHTML = editFormHtml(m, qis);
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function backToDetail() {
+    const box = $(detailCtx.boxId);
+    if (!box || !detailCtx.m) return;
+    box.innerHTML = memberDetailCard(detailCtx.m, detailCtx.browseCtx);
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function diffVal(f, v) {
+    if (v == null || String(v).trim() === "") return "";
+    return f.type === "date" ? (fmtDate(v) || "") : String(v).trim();
+  }
+  // 新旧差异：字段中文 -> 旧值 → 新值；最多 10 个差异字段
+  function buildDiff(m, payload) {
+    const out = {};
+    EDIT_FIELDS.forEach(f => {
+      const o = diffVal(f, m[f.key]);
+      const n = diffVal(f, payload[f.key]);
+      if (o !== n) out[f.label] = (o || "空") + " → " + (n || "空");
+    });
+    const keys = Object.keys(out);
+    if (keys.length > 10) {
+      const head = {};
+      keys.slice(0, 10).forEach(k => { head[k] = out[k]; });
+      head["其他差异 " + (keys.length - 10) + " 处"] = "";
+      return head;
+    }
+    return out;
+  }
+
+  async function saveMemberEdit() {
+    const m = detailCtx.m;
+    const box = $(detailCtx.boxId);
+    if (!m || !m.id || !box) return;
+    const payload = {};
+    EDIT_FIELDS.forEach(f => {
+      const el = box.querySelector('[data-field="' + f.key + '"]');
+      payload[f.key] = el ? el.value : "";
+    });
+    const cls = String(payload.class_name || "").trim();
+    const nm = String(payload.name || "").trim();
+    if (!cls || !nm) { showErr("班级与姓名不能为空"); return; }
+    payload.class_name = cls;
+    payload.name = nm;
+    // 保存前按现有时间线规则校验
+    const issue = timelineIssue(payload);
+    if (issue && !confirm("时间线存在异常（" + issue + "），仍要保存吗？")) return;
+    showLoading(true);
+    try {
+      const res = await PA.updateMember(m.id, payload);
+      if (res && res.error) throw new Error(res.error.message || "更新失败");
+      const target = (editRawValue(m, "class_name") ? editRawValue(m, "class_name") + " " : "") +
+        (editRawValue(m, "name") || "") +
+        (editRawValue(m, "student_id") ? "（" + editRawValue(m, "student_id") + "）" : "");
+      try {
+        await PA.logUpdate("update_member", target || "档案", buildDiff(m, payload));
+      } catch (e) { /* 日志失败不阻断主流程 */ }
+      const updated = Object.assign({}, m, payload);
+      detailCtx.m = updated;
+      box.innerHTML = memberDetailCard(updated, detailCtx.browseCtx);
+      if (typeof window.__browseRun === "function") { try { window.__browseRun(); } catch (e) { /* 忽略 */ } }
+      if (typeof loadStats === "function") { try { loadStats(); } catch (e) { /* 忽略 */ } }
+      if (typeof loadLogs === "function") { try { loadLogs(true); } catch (e) { /* 忽略 */ } }
+      toast("档案已更新");
+    } catch (e) {
+      showErr("保存失败：" + e.message);
+    } finally {
+      showLoading(false);
+    }
+  }
+
+  // 编辑入口委托：仅在管理员端生效；viewer 端无编辑元素也不会报错
+  function bindMemberEdit() {
+    document.addEventListener("click", e => {
+      if (!PA.isAdmin()) return;
+      if (e.target.closest(".member-edit-btn")) { e.preventDefault(); openMemberEdit(); return; }
+      if (e.target.closest("[data-edit-cancel]")) { e.preventDefault(); backToDetail(); return; }
+      if (e.target.closest("[data-edit-save]")) { e.preventDefault(); saveMemberEdit(); }
+    });
   }
 
   // ================================================================
@@ -222,10 +404,7 @@
         <td><button class="btn btn-ghost btn-sm" data-bopen="${i}">详情</button></td></tr>`;
     }).join("");
     tb.querySelectorAll("[data-bopen]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        $("browseDetail").innerHTML = memberDetailCard(rows[+btn.dataset.bopen]);
-        $("browseDetail").scrollIntoView({ behavior: "smooth" });
-      });
+      btn.addEventListener("click", () => renderMemberDetail(rows[+btn.dataset.bopen], "browseDetail", true, true));
     });
     $("browseTbl").closest(".tbl-wrap").scrollTop = 0;
   }
@@ -569,7 +748,7 @@
   // ================================================================
   // 4. 操作日志（管理员）
   // ================================================================
-  const ACTION_CN = { insert: "新增档案", update: "更新档案", upload_excel: "Excel导入", upload_word: "Word导入" };
+  const ACTION_CN = { insert: "新增档案", update: "更新档案", upload_excel: "Excel导入", upload_word: "Word导入", update_member: "单条编辑" };
   const LOG_PAGE = 20;
   let logOffset = 0;
   let logDone = false;
@@ -606,6 +785,7 @@
     bindSearch();
     bindBrowse();
     bindExport();
+    bindMemberEdit();
     bindExcelUpload();
     bindWordUpload();
     bindCommit();
