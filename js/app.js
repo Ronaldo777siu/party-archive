@@ -4,6 +4,7 @@
   const PA = window.PA;
 
   // ---------- 全局工具 ----------
+  const pad2 = n => String(n).padStart(2, "0");
   const fmtDate = v => { if (!v) return null; const d = new Date(v); if (isNaN(d)) return null; const p = n => String(n).padStart(2, "0"); return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()); };
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const showLoading = on => $("loadingMask").classList.toggle("show", !!on);
@@ -16,6 +17,33 @@
 
   const STAGE_LABEL = { "入党申请人": "入党申请人", "入党积极分子": "入党积极分子", "发展对象": "发展对象", "预备党员": "预备党员", "正式党员": "正式党员" };
   const STAGE_ORDER = ["入党申请人", "入党积极分子", "发展对象", "预备党员", "正式党员"];
+  const STAGE_CARDS = ["入党申请人", "入党积极分子", "发展对象", "预备党员"];
+  const STATUS_CARDS = ["继续发展", "待确认", "已退出", "转出", "转入"];
+
+  // 导出列：中文表头 -> 字段
+  const EXPORT_COLS = [
+    ["期数", "party_qi"], ["班级", "class_name"], ["姓名", "name"], ["性别", "gender"],
+    ["民族", "ethnicity"], ["政治面貌", "political_status"], ["发展阶段", "current_stage"], ["状态", "status_flag"],
+    ["出生日期", "birth_date"], ["入团日期", "join_league_date"], ["申请时间", "apply_date"],
+    ["谈话时间", "talk_date"], ["推优时间", "recommend_date"], ["积极分子确定时间", "activist_date"],
+    ["发展对象确定", "develop_date"], ["预备党员时间", "probation_date"], ["转正时间", "full_date"],
+    ["介绍人", "introducer"], ["学号", "student_id"], ["身份证", "id_card"], ["备注", "remark"]
+  ];
+
+  // 时间线异常：仅校验非空日期，后阶段早于前阶段即异常
+  const TL_SEQ = [
+    ["apply_date", "入党申请时间"], ["talk_date", "谈话时间"], ["recommend_date", "推优时间"],
+    ["activist_date", "积极分子确定时间"], ["develop_date", "发展对象确定时间"],
+    ["probation_date", "预备党员时间"], ["full_date", "转正时间"]
+  ];
+  function timelineIssue(r) {
+    for (let i = 0; i < TL_SEQ.length - 1; i++) {
+      const a = fmtDate(r[TL_SEQ[i][0]]);
+      const b = fmtDate(r[TL_SEQ[i + 1][0]]);
+      if (a && b && a > b) return TL_SEQ[i + 1][1] + "早于" + TL_SEQ[i][1];
+    }
+    return null;
+  }
 
   // ---------- 启动：会话校验 ----------
   async function bootstrap() {
@@ -40,7 +68,7 @@
   function initAdmin() {
     document.querySelectorAll(".admin-only").forEach(el => el.classList.remove("hidden"));
     loadQiOptions();
-    loadLogs();
+    loadLogs(true);
   }
 
   function bindNav() {
@@ -61,7 +89,8 @@
     document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
     const el = $("sec-" + name);
     if (el) el.classList.add("active");
-    if (name === "logs" && PA.isAdmin()) loadLogs();
+    if (name === "logs" && PA.isAdmin()) loadLogs(true);
+    if (name === "browse" && PA.isAdmin()) loadStats();
   }
 
   // ================================================================
@@ -149,19 +178,26 @@
     const run = async () => {
       showLoading(true);
       try {
-        const rows = await PA.listMembers({
+        let rows = await PA.listMembers({
           qi: $("fQi").value,
           stage: $("fStage").value,
           className: $("fClass").value.trim(),
           keyword: $("fKeyword").value.trim()
         });
+        const abn = $("fAbn").value;
+        if (abn === "pending") rows = rows.filter(r => (r.status_flag || "继续发展") === "待确认");
+        else if (abn === "timeline") rows = rows.filter(r => !!timelineIssue(r));
+        window.__browseRows = rows;
         renderBrowseTbl(rows);
+        const cntEl = $("browseCount"), expEl = $("exportBtn");
+        if (cntEl) cntEl.textContent = rows.length ? "共 " + rows.length + " 条档案" : "";
+        if (expEl) expEl.disabled = !rows.length;
       } catch (e) { showErr(e.message); }
       finally { showLoading(false); }
     };
     $("browseBtn").addEventListener("click", run);
     $("resetBtn").addEventListener("click", () => {
-      $("fQi").value = ""; $("fStage").value = ""; $("fClass").value = ""; $("fKeyword").value = "";
+      $("fQi").value = ""; $("fStage").value = ""; $("fClass").value = ""; $("fKeyword").value = ""; $("fAbn").value = "";
       run();
     });
     // 回车触发
@@ -175,12 +211,16 @@
       tb.innerHTML = `<tr><td colspan="9" class="empty">暂无符合条件的档案</td></tr>`;
       return;
     }
-    tb.innerHTML = rows.map((r, i) => `<tr>
-      <td>${esc(r.party_qi || "-")}</td><td>${esc(r.class_name)}</td><td><b>${esc(r.name)}</b></td>
-      <td>${esc(r.gender || "-")}</td><td>${esc(r.ethnicity || "-")}</td><td>${esc(r.political_status || "-")}</td>
-      <td><span class="stage-tag">${esc(r.current_stage || "-")}</span></td>
-      <td>${esc(r.status_flag || "继续发展")}</td>
-      <td><button class="btn btn-ghost btn-sm" data-bopen="${i}">详情</button></td></tr>`).join("");
+    tb.innerHTML = rows.map((r, i) => {
+      const abn = timelineIssue(r);
+      const st = r.status_flag || "继续发展";
+      return `<tr class="${abn ? "row-abn" : ""}">
+        <td>${esc(r.party_qi || "-")}</td><td>${esc(r.class_name)}</td><td><b>${esc(r.name)}</b></td>
+        <td>${esc(r.gender || "-")}</td><td>${esc(r.ethnicity || "-")}</td><td>${esc(r.political_status || "-")}</td>
+        <td><span class="stage-tag">${esc(r.current_stage || "-")}</span></td>
+        <td>${esc(st)}${abn ? ` <span class="abn-badge" title="${esc(abn)}">异常</span>` : ""}</td>
+        <td><button class="btn btn-ghost btn-sm" data-bopen="${i}">详情</button></td></tr>`;
+    }).join("");
     tb.querySelectorAll("[data-bopen]").forEach(btn => {
       btn.addEventListener("click", () => {
         $("browseDetail").innerHTML = memberDetailCard(rows[+btn.dataset.bopen]);
@@ -188,6 +228,67 @@
       });
     });
     $("browseTbl").closest(".tbl-wrap").scrollTop = 0;
+  }
+
+  // 统计概览：拉取轻量列后渲染数字卡片
+  async function loadStats() {
+    const box = $("statsCards");
+    if (!box) return;
+    box.innerHTML = `<div class="stat-hint">统计加载中…</div>`;
+    try {
+      const rows = await PA.fetchLightRows();
+      if (!rows || !rows.length) { box.innerHTML = `<div class="stat-hint">暂无档案数据</div>`; return; }
+      const total = rows.length;
+      const qiSet = [...new Set(rows.map(r => r.party_qi).filter(Boolean))];
+      let qiMain = "--", qiSub = "已覆盖期数";
+      if (qiSet.length) {
+        const nums = qiSet.map(v => parseFloat(String(v).replace(/[^\d.]/g, ""))).filter(v => isFinite(v));
+        qiMain = nums.length
+          ? (Math.min(...nums) === Math.max(...nums) ? String(Math.min(...nums)) : Math.min(...nums) + "~" + Math.max(...nums))
+          : String(qiSet[0]);
+        qiSub = "已覆盖期数 " + qiSet.length + " 期";
+      }
+      const stage = {}; STAGE_CARDS.forEach(s => stage[s] = 0);
+      rows.forEach(r => { if (r.current_stage && r.current_stage in stage) stage[r.current_stage] += 1; });
+      const stat = {}; STATUS_CARDS.forEach(s => stat[s] = 0);
+      rows.forEach(r => { const s = r.status_flag || "继续发展"; if (s in stat) stat[s] += 1; });
+      const card = (num, label, small) => `<div class="stat-card"><div class="num${small ? " small" : ""}">${esc(String(num))}</div><div class="lbl">${esc(label)}</div></div>`;
+      let html = `<div class="stats-cards">`;
+      html += card(total, "总人数");
+      html += card(qiMain, qiSub, true);
+      STAGE_CARDS.forEach(s => html += card(stage[s], s));
+      STATUS_CARDS.forEach(s => html += card(stat[s], s));
+      html += `</div>`;
+      box.innerHTML = html;
+    } catch (e) { box.innerHTML = `<div class="stat-hint">统计加载失败</div>`; }
+  }
+
+  // 导出 Excel：使用缓存 window.__browseRows，保持当前筛选结果
+  function bindExport() {
+    const btn = $("exportBtn");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      const rows = window.__browseRows || [];
+      if (!rows.length) { btn.disabled = true; return; }
+      try {
+        if (typeof XLSX === "undefined") await LibLoader.ensureXlsx();
+        const d = new Date();
+        const stamp = "" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate());
+        const sheetRows = rows.map(r => {
+          const o = {};
+          EXPORT_COLS.forEach(([cn, f]) => {
+            let v = r[f];
+            if (f === "birth_date" || f === "join_league_date" || f === "apply_date" || f === "talk_date" || f === "recommend_date" || f === "activist_date" || f === "develop_date" || f === "probation_date" || f === "full_date") v = fmtDate(v);
+            o[cn] = (v == null || v === "") ? "" : String(v);
+          });
+          return o;
+        });
+        const ws = XLSX.utils.json_to_sheet(sheetRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "档案");
+        XLSX.writeFile(wb, "党务档案_" + stamp + ".xlsx");
+      } catch (e) { showErr("导出失败：" + e.message); }
+    });
   }
 
   // ================================================================
@@ -424,25 +525,34 @@
   async function commitRows(type) {
     const pending = window.__pendingRows;
     if (!pending || pending.type !== type) return;
-    if (!confirm(`确认将 ${pending.rows.length} 条档案导入数据库？已有同班级同姓名同学号记录将被更新。`)) return;
+    if (!confirm(`确认将 ${pending.rows.length} 条档案写入数据库？同班级同姓名同学号匹配唯一的将更新，无匹配将新增，匹配多条将跳过。`)) return;
     showLoading(true);
     try {
       const CHUNK = 100;
-      let done = 0;
+      const agg = { inserted: 0, updated: 0, skipped: 0, conflicts: [] };
       for (let i = 0; i < pending.rows.length; i += CHUNK) {
-        await PA.upsertMembers(pending.rows.slice(i, i + CHUNK));
-        done = pending.rows.slice(i, i + CHUNK).length;
+        const st = await PA.upsertMembers(pending.rows.slice(i, i + CHUNK));
+        agg.inserted += st.inserted;
+        agg.updated += st.updated;
+        agg.skipped += st.skipped;
+        agg.conflicts.push(...(st.conflicts || []));
       }
-      await PA.logUpdate("upload_" + (type === "excel" ? "excel" : "word"), pending.fileName, { rows: pending.rows.length });
+      await PA.logUpdate("upload_" + (type === "excel" ? "excel" : "word"), pending.fileName, { rows: pending.rows.length, inserted: agg.inserted, updated: agg.updated, skipped: agg.skipped });
       showLoading(false);
-      toast(`导入成功：${pending.rows.length} 条档案已更新`);
+      let msg = `导入完成：新增 ${agg.inserted} 条，更新 ${agg.updated} 条，跳过 ${agg.skipped} 条`;
+      if (agg.conflicts.length) {
+        const shown = agg.conflicts.slice(0, 3).join("；");
+        msg += `；匹配多条跳过 ${agg.conflicts.length} 条：${shown}${agg.conflicts.length > 3 ? "…" : ""}`;
+      }
+      toast(msg, 6000);
       // 清空预览与文件
       window.__pendingRows = null;
       const boxId = type === "excel" ? "excelPreviewBox" : "wordPreviewBox";
       $(boxId).classList.add("hidden");
       if (type === "excel") $("excelFile").value = ""; else $("wordFile").value = "";
-      loadLogs();
+      loadLogs(true);
       loadQiOptions();
+      loadStats();
     } catch (e) {
       showLoading(false);
       showErr("导入失败：" + e.message);
@@ -460,29 +570,48 @@
   // 4. 操作日志（管理员）
   // ================================================================
   const ACTION_CN = { insert: "新增档案", update: "更新档案", upload_excel: "Excel导入", upload_word: "Word导入" };
-  async function loadLogs() {
+  const LOG_PAGE = 20;
+  let logOffset = 0;
+  let logDone = false;
+  const logRowHtml = l => {
+    const detail = l.detail ? (typeof l.detail === "object" ? JSON.stringify(l.detail) : l.detail) : "";
+    return `<div class="log-item">
+      <span class="time">${esc((l.created_at || "").replace("T", " ").slice(0, 19))}</span>
+      <span><b>${esc(l.operator)}</b><span class="act">${esc(ACTION_CN[l.action] || l.action)}</span>${esc(l.target || "")}${detail ? `<br><span style="color:#999;font-size:12px">${esc(detail)}</span>` : ""}</span>
+    </div>`;
+  };
+  async function loadLogs(reset) {
     const box = $("logsList");
+    const wrap = $("logMoreWrap");
+    if (reset) { logOffset = 0; logDone = false; box.innerHTML = ""; if (wrap) wrap.classList.add("hidden"); }
+    if (logDone) return;
     try {
-      const logs = await PA.getLogs(200);
-      if (!logs.length) { box.innerHTML = `<div class="card" style="text-align:center;color:#999;">暂无操作日志</div>`; return; }
-      box.innerHTML = logs.map(l => {
-        const detail = l.detail ? (typeof l.detail === "object" ? JSON.stringify(l.detail) : l.detail) : "";
-        return `<div class="log-item">
-          <span class="time">${esc((l.created_at || "").replace("T", " ").slice(0, 19))}</span>
-          <span><b>${esc(l.operator)}</b><span class="act">${esc(ACTION_CN[l.action] || l.action)}</span>${esc(l.target || "")}${detail ? `<br><span style="color:#999;font-size:12px">${esc(detail)}</span>` : ""}</span>
-        </div>`;
-      }).join("");
-    } catch (e) { box.innerHTML = `<div class="card" style="color:#c0392b">日志加载失败</div>`; }
+      const logs = await PA.getLogs(LOG_PAGE, logOffset);
+      if (!logs.length) {
+        if (!box.children.length) box.innerHTML = `<div class="card" style="text-align:center;color:#999;">暂无操作日志</div>`;
+        logDone = true; if (wrap) wrap.classList.add("hidden");
+        return;
+      }
+      box.insertAdjacentHTML("beforeend", logs.map(logRowHtml).join(""));
+      logOffset += logs.length;
+      if (logs.length < LOG_PAGE) { logDone = true; if (wrap) wrap.classList.add("hidden"); }
+      else if (wrap) wrap.classList.remove("hidden");
+    } catch (e) {
+      if (!box.children.length) box.innerHTML = `<div class="card" style="color:#c0392b">日志加载失败</div>`;
+    }
   }
 
   // ---------- 初始化 ----------
   document.addEventListener("DOMContentLoaded", () => {
     bindSearch();
     bindBrowse();
+    bindExport();
     bindExcelUpload();
     bindWordUpload();
     bindCommit();
-    $("refreshLogs").addEventListener("click", loadLogs);
+    $("refreshLogs").addEventListener("click", () => loadLogs(true));
+    const moreBtn = $("loadMoreLogs");
+    if (moreBtn) moreBtn.addEventListener("click", () => loadLogs(false));
     bootstrap();
   });
 })();
