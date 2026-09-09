@@ -68,6 +68,21 @@
     _profile = null;
   }
 
+  // 分页拉取全量（Supabase 单请求默认最多返回 1000 行，超量需循环 range）
+  async function fetchAll(builder, pageSize = 1000) {
+    const all = [];
+    let from = 0;
+    for (;;) {
+      const { data, error } = await builder.range(from, from + pageSize - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  }
+
   // 精确查询：班级 + 姓名
   async function queryMembers(className, name) {
     const client = await getClient();
@@ -79,7 +94,7 @@
     return data || [];
   }
 
-  // 列表浏览：期数/阶段/班级/关键字 筛选
+  // 列表浏览：期数/阶段/班级/关键字 筛选（分页全量）
   async function listMembers({ qi, stage, className, keyword } = {}) {
     const client = await getClient();
     let q = client.from("members").select("*");
@@ -87,16 +102,16 @@
     if (stage) q = q.eq("current_stage", stage);
     if (className) q = q.ilike("class_name", "%" + className + "%");
     if (keyword) q = q.or(`name.ilike.%${keyword}%,student_id.ilike.%${keyword}%`);
-    const { data, error } = await q.order("party_qi", { ascending: true }).order("class_name").limit(2000);
-    if (error) throw new Error("加载失败：" + error.message);
+    q = q.order("party_qi", { ascending: true }).order("class_name");
+    const data = await fetchAll(q);
     return data || [];
   }
 
   async function listDistinct(column) {
     const client = await getClient();
-    const { data, error } = await client.from("members").select(column);
-    if (error) throw new Error("加载失败：" + error.message);
-    return [...new Set((data || []).map(r => r[column]).filter(Boolean))].sort();
+    const q = client.from("members").select(column);
+    const data = await fetchAll(q);
+    return [...new Set((data || []).map(r => r[column]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-Hans-CN", { numeric: true }));
   }
 
   // 写入（upsert，按班级+姓名+学号匹配）—— 管理员
