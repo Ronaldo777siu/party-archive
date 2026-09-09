@@ -114,15 +114,90 @@
     return [...new Set((data || []).map(r => r[column]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-Hans-CN", { numeric: true }));
   }
 
-  // 写入（upsert，按班级+姓名+学号匹配）—— 管理员
-  async function upsertMembers(rows) {
+  // 轻量统计：仅拉取期数/阶段/状态三列
+  async function fetchLightRows() {
     const client = await getClient();
-    const { data, error } = await client.from("members").upsert(rows, {
-      onConflict: "class_name,name,student_id",
-      ignoreDuplicates: false
+    const q = client.from("members").select("party_qi,current_stage,status_flag");
+    const data = await fetchAll(q);
+    return data || [];
+  }
+
+  // 写入（先查后写，按班级+姓名+学号匹配）—— 管理员
+  // 匹配规则：行 student_id 非空 -> 匹配 (class_name+name+student_id) 完全相等；
+  //          行 student_id 为空 -> 匹配 (class_name+name 且库内 student_id 为空) 的记录。
+  // 匹配唯一 -> update（按 id 单条更新该行全部字段）；匹配多条 -> 跳过并计入 conflicts（不改库）；
+  // 无匹配 -> insert。返回 { inserted, updated, skipped, conflicts }，不抛错返回 error。
+  async function upsertMembers(rows) {
+    const stats = { inserted: 0, updated: 0, skipped: 0, conflicts: [] };
+    if (!rows || !rows.length) return stats;
+    const client = await getClient();
+
+    // 拉取现有关键列（id/班级/姓名/学号）
+    let existing = [];
+    try {
+      existing = await fetchAll(client.from("members").select("id,class_name,name,student_id"));
+    } catch (e) {
+      throw new Error("写入前读取档案失败：" + e.message);
+    }
+    const bucketKeyed = new Map(); // key: 班级|姓名|学号 -> [id...]
+    const bucketNoSid = new Map(); // key: 班级|姓名 -> [id...]（库内学号为空）
+    const pushMap = (map, k, id) => { if (!map.has(k)) map.set(k, []); map.get(k).push(id); };
+    existing.forEach(r => {
+      const c = String(r.class_name || "").trim();
+      const n = String(r.name || "").trim();
+      const sid = r.student_id == null ? "" : String(r.student_id).trim();
+      if (!c || !n) return;
+      if (sid) pushMap(bucketKeyed, c + "|" + n + "|" + sid, r.id);
+      else pushMap(bucketNoSid, c + "|" + n, r.id);
     });
-    if (error) throw new Error("写入失败：" + error.message);
-    return data;
+
+    // 用于批内去重：同一批中前面已写入的 key -> id（后续重复行直接更新该条）
+    const addedId = new Map();
+    const FIELDS = ["gender", "birth_date", "ethnicity", "political_status", "id_card", "join_league_date", "party_qi", "current_stage", "apply_date", "talk_date", "recommend_date", "activist_date", "develop_date", "probation_date", "full_date", "introducer", "status_flag", "remark"];
+
+    for (const row of rows) {
+      const c = String(row.class_name || "").trim();
+      const n = String(row.name || "").trim();
+      const sid = row.student_id == null ? "" : String(row.student_id).trim();
+      if (!c || !n) { stats.skipped += 1; continue; }
+      const label = c + " " + n + (sid ? "（" + sid + "）" : "");
+
+      // 构造写入负载（按该行全字段更新）
+      const payload = { class_name: c, name: n, student_id: sid || null };
+      FIELDS.forEach(f => { payload[f] = row[f] == null ? null : row[f]; });
+
+      const key = sid ? (c + "|" + n + "|" + sid) : (c + "|" + n);
+      const bucket = sid ? bucketKeyed : bucketNoSid;
+      let targetIds = addedId.has(key) ? [addedId.get(key)] : (bucket.get(key) || []);
+
+      if (targetIds.length === 1) {
+        const { error } = await client.from("members").update(payload).eq("id", targetIds[0]);
+        if (error) {
+          stats.skipped += 1;
+          stats.conflicts.push(label + "（更新失败：" + error.message + "）");
+          continue;
+        }
+        stats.updated += 1;
+        addedId.set(key, targetIds[0]); // 后续同 key 行走批内更新，避免重复插入
+      } else if (targetIds.length > 1) {
+        stats.skipped += 1;
+        stats.conflicts.push(label);
+      } else {
+        const ins = { ...payload };
+        delete ins.id;
+        const { data, error } = await client.from("members").insert(ins).select("id");
+        if (error || !data || !data.length || !data[0].id) {
+          stats.skipped += 1;
+          stats.conflicts.push(label + (error ? "（写入失败：" + error.message + "）" : "（写入无返回）"));
+          continue;
+        }
+        stats.inserted += 1;
+        const nid = data[0].id;
+        addedId.set(key, nid);
+        pushMap(bucket, key, nid);
+      }
+    }
+    return stats;
   }
 
   async function logUpdate(action, target, detail) {
@@ -136,16 +211,17 @@
     });
   }
 
-  async function getLogs(limit = 100) {
+  // 日志分页读取（时间倒序）
+  async function getLogs(limit = 20, offset = 0) {
     const client = await getClient();
     const { data, error } = await client.from("update_logs")
-      .select("*").order("created_at", { ascending: false }).limit(limit);
+      .select("*").order("created_at", { ascending: false }).range(offset, offset + limit - 1);
     if (error) throw new Error("日志读取失败");
     return data || [];
   }
 
   window.PA = {
     login, signOut, currentProfile, loadProfile, getProfile, isAdmin,
-    queryMembers, listMembers, listDistinct, upsertMembers, logUpdate, getLogs
+    queryMembers, listMembers, listDistinct, fetchLightRows, upsertMembers, logUpdate, getLogs
   };
 })();
