@@ -200,6 +200,19 @@
     return stats;
   }
 
+  // 单条编辑（管理员）：按 id 更新；payload 仅含用户可编辑字段，空字符串统一转 null
+  async function updateMember(id, payload) {
+    const clean = {};
+    Object.keys(payload || {}).forEach(k => {
+      let v = payload[k];
+      if (v == null || String(v).trim() === "") clean[k] = null;
+      else clean[k] = v;
+    });
+    const client = await getClient();
+    const { error } = await client.from("members").update(clean).eq("id", id);
+    return { error };
+  }
+
   async function logUpdate(action, target, detail) {
     const client = await getClient();
     const me = getProfile();
@@ -222,6 +235,6 @@
 
   window.PA = {
     login, signOut, currentProfile, loadProfile, getProfile, isAdmin,
-    queryMembers, listMembers, listDistinct, fetchLightRows, upsertMembers, logUpdate, getLogs
+    queryMembers, listMembers, listDistinct, fetchLightRows, upsertMembers, updateMember, logUpdate, getLogs
   };
 })();
