@@ -64,6 +64,7 @@
       <section class="section admin-only" id="sec-browse">
         <h2 class="page-title">列表浏览</h2>
         <p class="page-sub">按入党期数 / 阶段 / 班级筛选，总览党务档案</p>
+        <div id="statsCards"></div>
         <div class="card">
           <div class="filter-row" id="browseFilters">
             <label>入党期数 <select id="fQi"><option value="">全部</option></select></label>
@@ -77,8 +78,17 @@
             </select></label>
             <label>班级 <input type="text" id="fClass" placeholder="班级关键词" style="width:130px"></label>
             <label>姓名/学号 <input type="text" id="fKeyword" placeholder="姓名或学号" style="width:140px"></label>
+            <label>档案异常 <select id="fAbn">
+              <option value="">全部</option>
+              <option value="pending">仅待确认</option>
+              <option value="timeline">仅时间线异常</option>
+            </select></label>
             <button class="btn btn-ghost btn-sm" id="browseBtn">筛选</button>
             <button class="btn btn-ghost btn-sm" id="resetBtn">重置</button>
+          </div>
+          <div class="browse-toolbar">
+            <span class="cnt" id="browseCount"></span>
+            <button class="btn btn-ghost btn-sm" id="exportBtn" disabled>导出 Excel</button>
           </div>
           <div class="tbl-wrap" style="max-height:calc(100vh - 330px); overflow:auto;">
             <table class="tbl" id="browseTbl">
@@ -145,6 +155,9 @@
             <button class="btn btn-ghost btn-sm" id="refreshLogs">刷新日志</button>
           </div>
           <div id="logsList"></div>
+          <div class="log-more-wrap hidden" id="logMoreWrap">
+            <button class="btn btn-ghost btn-sm" id="loadMoreLogs">加载更多</button>
+          </div>
         </div>
       </section>
     </main>
